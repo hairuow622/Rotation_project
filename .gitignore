@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Genomic / NGS data
+*.bed
+*.bed.gz
+*.narrowPeak
+*.broadPeak
+*.bam
+*.bai
+*.cram
+*.crai
+*.bw
+*.bigWig
+*.bigwig
+*.fa
+*.fasta
+*.fai
+*.fastq
+*.fq
+*.fastq.gz
+*.vcf
+*.vcf.gz
+*.tbi
+
+# Webdataset / training artifacts
+*.tar
+*.tar.gz
+*.tgz
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+lightning_logs/
+wandb/
+outputs/
+output/
+checkpoints/
+logs/
+tmp/
+*.log
+
+# Common data/output dirs
+data/
+datasets/
+wds/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
