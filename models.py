@@ -1,6 +1,7 @@
 Description="NN model collection"
 
 from copy import deepcopy
+import inspect
 import os
 import sys
 
@@ -63,7 +64,7 @@ class TrainingRoutineHook(pl.LightningModule):
             target_loss = F.binary_cross_entropy_with_logits(pred_target_r_s, torch.cat((label_r_s_b, label_r_s_ub)).float())
             accuracy = self.accuracy(F.sigmoid(pred_target_r_s), torch.cat((label_r_s_b, label_r_s_ub)))
             self.log('train_readcount_entropy_loss', target_loss)
-            self.log('accuracy', accuracy, prog_bar=True)
+            self.log('train_accuracy', accuracy, on_step=True, on_epoch=True, prog_bar=True)
         else:
             target_loss = F.mse_loss(pred_target_r_s, torch.cat((y_r_s_b, y_r_s_ub)))
             self.log('train_readcount_MSE_loss', target_loss)
@@ -92,7 +93,7 @@ class TrainingRoutineHook(pl.LightningModule):
             target_loss = F.binary_cross_entropy_with_logits(pred_target_r_s, torch.cat((label_r_s_b, label_r_s_ub)))
             accuracy = self.accuracy(F.sigmoid(pred_target_r_s), torch.cat((label_r_s_b, label_r_s_ub)))
             self.log('train_readcount_entropy_loss', target_loss)
-            self.log('accuracy', accuracy, prog_bar=True)
+            self.log('train_accuracy', accuracy, on_step=True, on_epoch=True, prog_bar=True)
         else:
             target_loss = F.mse_loss(pred_target_r_s, torch.cat((y_r_s_b, y_r_s_ub)))
             self.log('train_readcount_MSE_loss', target_loss)
@@ -108,7 +109,7 @@ class TrainingRoutineHook(pl.LightningModule):
             val_loss = F.binary_cross_entropy_with_logits(y_target, label)
             accuracy = self.accuracy(F.sigmoid(y_target), label)
             self.log('val_loss', val_loss, sync_dist=True)
-            self.log('accuracy', accuracy, sync_dist=True, prog_bar=True)
+            self.log('val_accuracy', accuracy, sync_dist=True, on_epoch=True, prog_bar=True)
         else:    
             val_loss = F.mse_loss(y_target, y)
             self.log('val_loss', val_loss, sync_dist=True)
@@ -116,9 +117,19 @@ class TrainingRoutineHook(pl.LightningModule):
     
     # Using custom or multiple metrics (default_hp_metric=False)
     def on_test_start(self):
-        # TODO: add MSE, Pearson correlation hparams for regression models
-        self.logger.log_hyperparams(self.hparams, {"hp/auROC": 0, "hp/auPRC": 0,
-                                                   "hp/MSE": 0, "hp/PearsonR": 0})
+        # TensorBoard log_hyperparams accepts a metrics placeholder; WandbLogger only accepts params.
+        metrics = {"hp/auROC": 0, "hp/auPRC": 0, "hp/MSE": 0, "hp/PearsonR": 0}
+        logger = self.logger
+        if hasattr(logger, "loggers"):
+            loggers = logger.loggers
+        else:
+            loggers = [logger]
+        for lg in loggers:
+            params = inspect.signature(lg.log_hyperparams).parameters
+            if "metrics" in params:
+                lg.log_hyperparams(self.hparams, metrics)
+            else:
+                lg.log_hyperparams(self.hparams)
         
     def on_test_epoch_start(self):
         # ensure world size is 1
@@ -462,7 +473,7 @@ class ConvTowerDomain_v6(TrainingRoutineHook):
             target_loss = F.binary_cross_entropy_with_logits(pred_target_r_s, label_r_s)
             accuracy = self.accuracy(F.sigmoid(pred_target_r_s), label_r_s)
             self.log('train_readcount_entropy_loss', target_loss)
-            self.log('accuracy', accuracy, prog_bar=True)
+            self.log('train_accuracy', accuracy, on_step=True, on_epoch=True, prog_bar=True)
         else:
             target_loss = F.mse_loss(pred_target_r_s, y_r_s)
             self.log('train_readcount_MSE_loss', target_loss)
@@ -482,7 +493,7 @@ class ConvTowerDomain_v6(TrainingRoutineHook):
             val_loss = F.binary_cross_entropy_with_logits(y_target, label)
             accuracy = self.accuracy(F.sigmoid(y_target), label)
             self.log('val_loss', val_loss, sync_dist=True)
-            self.log('accuracy', accuracy, sync_dist=True, prog_bar=True)
+            self.log('val_accuracy', accuracy, sync_dist=True, on_epoch=True, prog_bar=True)
         else:    
             val_loss = F.mse_loss(y_target, y)
             self.log('val_loss', val_loss, sync_dist=True)
@@ -702,7 +713,7 @@ class ConvTowerDomain_v6_GradientReversal_SplitSeqChrom_MultiDomain(ConvTowerDom
             target_loss = F.binary_cross_entropy_with_logits(pred_target_r_s, torch.cat((label_r_s_b, label_r_s_ub)))
             accuracy = self.accuracy(F.sigmoid(pred_target_r_s), torch.cat((label_r_s_b, label_r_s_ub)))
             self.log('train_readcount_entropy_loss', target_loss)
-            self.log('accuracy', accuracy, prog_bar=True)
+            self.log('train_accuracy', accuracy, on_step=True, on_epoch=True, prog_bar=True)
         else:
             target_loss = F.mse_loss(pred_target_r_s, torch.cat((y_r_s_b, y_r_s_ub)))
             self.log('train_readcount_MSE_loss', target_loss)
@@ -1125,16 +1136,45 @@ class MyLightningCLI(LightningCLI):
         parser.add_lr_scheduler_args(torch.optim.lr_scheduler.ExponentialLR)
 
 def cli_main():
+    from datetime import datetime
+
+    run_name = os.environ.get("RUN_NAME")
+    if not run_name:
+        run_name = datetime.now().strftime("FOXA1_%Y%m%d_%H%M%S")
+        os.environ["RUN_NAME"] = run_name
+    if "--trainer.logger.init_args.name" not in sys.argv:
+        sys.argv.extend(["--trainer.logger.init_args.name", run_name])
+
+    ckpt_dir = os.path.join("checkpoints", run_name)
+    print(f"RUN_NAME={run_name}")
+    print(f"Checkpoint directory: {ckpt_dir}")
+    os.makedirs(ckpt_dir, exist_ok=True)
     cli = LightningCLI(seed_everything_default=32,
                        save_config_kwargs={"overwrite": True},
                          trainer_defaults={
                             "callbacks": [
-                                ModelCheckpoint(filename="checkpoint_{epoch}-{val_loss:.6f}", 
-                                                monitor='val_loss', 
-                                                save_last=True, 
-                                                save_top_k=1, 
-                                                mode='min', 
-                                                every_n_epochs=1),
+                                # 每个 epoch 训练结束后覆盖最新权重，不依赖 validation
+                                ModelCheckpoint(
+                                    dirpath=ckpt_dir,
+                                    filename="last-{epoch:02d}",
+                                    save_top_k=0,
+                                    save_last=True,
+                                    every_n_epochs=1,
+                                    save_on_train_epoch_end=True,
+                                    verbose=True,
+                                ),
+                                # 验证后只保留 val_loss 最低的一份
+                                ModelCheckpoint(
+                                    dirpath=ckpt_dir,
+                                    filename="best-{epoch:02d}-{val_loss:.6f}",
+                                    monitor="val_loss",
+                                    mode="min",
+                                    save_top_k=1,
+                                    save_last=False,
+                                    every_n_epochs=1,
+                                    save_on_train_epoch_end=False,
+                                    verbose=True,
+                                ),
                                 ModelSummary(max_depth=-1),
                                 LearningRateMonitor(logging_interval='step')]
                         })

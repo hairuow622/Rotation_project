@@ -32,7 +32,7 @@ from Bio import motifs
 from pybedtools import BedTool, Interval
 import pybedtools
 from seqchromloader import dump_data_webdataset, utils
-pybedtools.set_tempdir('/home/imv5103/tmp')
+pybedtools.set_tempdir('/home/hvw5476/tmp')
 DEFAULT_TRANSFORM_STR = (
     "{'target': lambda t: np.log(t+1), 'label': lambda l: l.astype(np.float32)}"
 )
@@ -398,6 +398,7 @@ def define_coordinates_in_one_cell(
     window_length: int,
     val_chrom: list,
     test_chrom: list,
+    generate_domain_data: bool,
     out_prefix: str,
     out_dir: str,
 ):
@@ -406,7 +407,11 @@ def define_coordinates_in_one_cell(
         chip_peak_file, header=None, usecols=range(3), names=["chrom", "start", "end"]
     )
 
-    acc_bdt = BedTool(dnase_peak_file) if dnase_peak_file is not None else None
+    acc_bdt = (
+        BedTool(dnase_peak_file)
+        if generate_domain_data and dnase_peak_file is not None
+        else None
+    )
     blacklist_bdt = BedTool(blacklist_file)
     motif = (
         motifs.parse(open(motif_file, "r"), "jaspar")[0]
@@ -516,20 +521,23 @@ def define_coordinates_in_one_cell(
         n=100000,
     )
 
-    domain_sample_size = max(
-        len(training_coords_readcount_bound), len(training_coords_readcount_unbound)
-    )
-    training_coords_domain = define_domain_task_coordinates_new(
-        chip_coords=chip_seq_coordinates,
-        genome_sizes_file=genome_size_file,
-        genome_fasta_file=genome_fasta_file,
-        acc_bdt=acc_bdt,
-        curr_genome_bdt=train_genome_bdt,
-        blacklist_bdt=blacklist_bdt,
-        motif=motif,
-        L=window_length,
-        n=domain_sample_size,
-    )
+    training_coords_domain = None
+    if generate_domain_data:
+        domain_sample_size = max(
+            len(training_coords_readcount_bound),
+            len(training_coords_readcount_unbound),
+        )
+        training_coords_domain = define_domain_task_coordinates_new(
+            chip_coords=chip_seq_coordinates,
+            genome_sizes_file=genome_size_file,
+            genome_fasta_file=genome_fasta_file,
+            acc_bdt=acc_bdt,
+            curr_genome_bdt=train_genome_bdt,
+            blacklist_bdt=blacklist_bdt,
+            motif=motif,
+            L=window_length,
+            n=domain_sample_size,
+        )
 
     # save filenames into YAML
     df_config = {
@@ -538,8 +546,9 @@ def define_coordinates_in_one_cell(
         f"{out_prefix}_val_readcount": validation_coords_readcount,
         f"{out_prefix}_test_readcount": test_coords_readcount,
         f"{out_prefix}_test_random": test_coords_random,
-        f"{out_prefix}_train_domain": training_coords_domain,
     }
+    if training_coords_domain is not None:
+        df_config[f"{out_prefix}_train_domain"] = training_coords_domain
 
     # Assign strand information to the coordinates
     def forwardReverse(df):
@@ -643,7 +652,7 @@ def standardize_transform(
     "return tranform library according to the standardization and normalization booleans"
 
     transforms = {"label": default_label_transform}
-    if standardizeChrom:
+    if standardizeChrom and bigwigs:
         bws_mean, bws_std = get_mean_and_std(bigwigs)
         transforms["chrom"] = partial(
             default_chroms_transform, mean=bws_mean, std=bws_std
@@ -740,6 +749,7 @@ if __name__ == "__main__":
         window_length=config["target_window_length"],
         val_chrom=config.get("val_chrom"),
         test_chrom=config["test_chrom"],
+        generate_domain_data=config.get("generate_domain_data", False),
         out_prefix="single",
         out_dir=args.output,
     )
@@ -748,7 +758,7 @@ if __name__ == "__main__":
 
     if args.wds:
         genome_fasta_file = config["genome_fasta_file"]
-        bigwigs = config["pre_bws"]
+        bigwigs = config.get("pre_bws", [])
         post_chip_bam_file = None
         post_chip_bw_file = None
         if config.get("post_chip_bam") is not None:

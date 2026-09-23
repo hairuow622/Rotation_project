@@ -1,26 +1,35 @@
 # pytorch_lightning==2.0.0
 seed_everything: null
 trainer:
-  logger:
-    class_path: pytorch_lightning.loggers.WandbLogger
-    init_args:
-      project: Rotation_project
-      entity: hairuow-carnegie-mellon-university
-      name: FOXA1_ConvTowerDomain_v6
-      save_dir: .
-      log_model: true
   accelerator: gpu
   strategy: ddp_find_unused_parameters_true
   devices: 1
   num_nodes: 1
   precision: bf16-mixed
+  logger:
+    class_path: pytorch_lightning.loggers.TensorBoardLogger
+    init_args:
+      save_dir: tb_logs
+      name: FOXA1_run_002_test
+      version: null
+      log_graph: false
+      default_hp_metric: true
+      prefix: ''
+      sub_dir: null
   callbacks:
   - class_path: pytorch_lightning.callbacks.EarlyStopping
     init_args:
       monitor: val_loss
       min_delta: 0.001
       patience: 20
+      verbose: false
       mode: min
+      strict: true
+      check_finite: true
+      stopping_threshold: null
+      divergence_threshold: null
+      check_on_train_epoch_end: null
+      log_rank_zero_only: false
   fast_dev_run: false
   max_epochs: 50
   min_epochs: null
@@ -53,13 +62,13 @@ trainer:
   sync_batchnorm: false
   reload_dataloaders_every_n_epochs: 0
   default_root_dir: checkpoints
-ckpt_path: null
+ckpt_path: checkpoints/FOXA1_run_002/best-epoch=20-val_loss=0.361897.ckpt
+verbose: true
 model:
-  class_path: ConvTowerDomain_v6
+  class_path: __main__.ConvTowerDomain_v6
   init_args:
-    classification: True
     chroms_channel: 1
-    input_len: 1024 
+    input_len: 1024
     conv1d_filter: 128
     conv_tower_depth: 4
     conv_tower_kernel: 5
@@ -67,15 +76,18 @@ model:
     attn_num_layers: 1
     attn_num_heads: 8
     attn_dim_feedforward: 1024
+    activation: LeakyReLU
     dropout: 0.5
     gamma: 0.999999
-    lr: 1e-5
-    seqonly: True
+    lr: 1.0e-05
+    lambd: 0
+    classification: true
+    seqonly: true
 data:
   class_path: datamodule.SingleDataModuleWds
   init_args:
-    config_file: null
+    config_file: data_config.post_run.yaml
+    parent_dir: ./
     num_workers: 4
     batch_size: 128
-    parent_dir: ./
-
+    steps_per_epoch: 1000
