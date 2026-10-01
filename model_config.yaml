@@ -59,7 +59,7 @@ model:
   init_args:
     classification: True
     chroms_channel: 1
-    input_len: 1024 
+    input_len: 240 
     conv1d_filter: 128
     conv_tower_depth: 4
     conv_tower_kernel: 5

@@ -79,6 +79,7 @@ def define_random_coordinates(
     curr_genome_bdt: BedTool,
     blacklist_bdt: BedTool,
     l: int,
+    input_window_length: int,
     n: int,
 ):
 
@@ -93,7 +94,12 @@ def define_random_coordinates(
         seed=SEED,
     )
 
-    random_regions = remove_ambiguous_region(random_regions, chip_coords_bdt)
+    random_regions = remove_ambiguous_region(
+        random_regions,
+        chip_coords_bdt,
+        center_win=l,
+        train_win=input_window_length,
+    )
 
     random_regions = (
         BedTool.from_dataframe(random_regions)
@@ -115,6 +121,7 @@ def define_training_coordinates(
     blacklist_bdt: BedTool,
     motif: motifs.Motif | None,
     L,
+    input_window_length: int,
     bound_shift_factor: float,
     unbound_random_factor: float,
     unbound_gc_factor: float,
@@ -244,8 +251,8 @@ def define_training_coordinates(
         .query("start >= 0")
         .reset_index(drop=True)
     )
-    ## remove unbound regions whose 1024bp training windows intersect with chip peaks
-    unbound = unbound[~mark_region(unbound, chip_coords_bdt, win=1024)]
+    ## remove unbound regions whose model input windows intersect with chip peaks
+    unbound = unbound[~mark_region(unbound, chip_coords_bdt, win=input_window_length)]
     ## merge all sets
     training_coords_bichrom = pd.concat(
         [bound_sample_shift, unbound], ignore_index=True
@@ -301,6 +308,7 @@ def define_domain_task_coordinates_new(
     blacklist_bdt: BedTool,
     motif,
     L: int,
+    input_window_length: int,
     n: int,
 ):
 
@@ -362,7 +370,12 @@ def define_domain_task_coordinates_new(
     ).sample(frac=1, random_state=RNG, ignore_index=True)
 
     # remove ambiguous regions
-    domain_coords_df = remove_ambiguous_region(domain_coords_df, chip_coords_bdt)
+    domain_coords_df = remove_ambiguous_region(
+        domain_coords_df,
+        chip_coords_bdt,
+        center_win=L,
+        train_win=input_window_length,
+    )
     # assign labels based on if intervals overlap with chip-seq peak or not
     domain_coords_df = (
         BedTool.from_dataframe(domain_coords_df)
@@ -396,6 +409,7 @@ def define_coordinates_in_one_cell(
     motif_file: str,
     augment_goal: int,
     window_length: int,
+    input_window_length: int,
     val_chrom: list,
     test_chrom: list,
     generate_domain_data: bool,
@@ -461,6 +475,7 @@ def define_coordinates_in_one_cell(
             blacklist_bdt,
             motif=motif,
             L=window_length,
+            input_window_length=input_window_length,
             bound_shift_factor=bound_shift_factor,
             unbound_random_factor=unbound_random_factor,
             unbound_gc_factor=unbound_gc_factor,
@@ -518,6 +533,7 @@ def define_coordinates_in_one_cell(
         test_genome_bdt,
         blacklist_bdt,
         l=window_length,
+        input_window_length=input_window_length,
         n=100000,
     )
 
@@ -536,6 +552,7 @@ def define_coordinates_in_one_cell(
             blacklist_bdt=blacklist_bdt,
             motif=motif,
             L=window_length,
+            input_window_length=input_window_length,
             n=domain_sample_size,
         )
 
@@ -747,6 +764,7 @@ if __name__ == "__main__":
         motif_file=config.get("motif_file"),
         augment_goal=config["augment_goal"],
         window_length=config["target_window_length"],
+        input_window_length=config["input_window_length"],
         val_chrom=config.get("val_chrom"),
         test_chrom=config["test_chrom"],
         generate_domain_data=config.get("generate_domain_data", False),
@@ -785,5 +803,7 @@ if __name__ == "__main__":
                 )
                 config["webdataset"][key][t] = wds_files
 
-        with open(args.config.replace(".yaml", "") + ".post_run.yaml", "w") as f:
+        post_run_path = os.path.join(args.output, "post_run.yaml")
+        with open(post_run_path, "w") as f:
             yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+        print(f"Wrote {post_run_path}")

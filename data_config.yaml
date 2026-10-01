@@ -2,8 +2,8 @@ post_chip_peak: /home/hvw5476/group/lab/hairuow/rotation_project/A549_FOXA1_CON_
 genome_size_file: /home/imv5103/group/lab/ishika/genomes/hg38/hg38.fa.fai
 genome_fasta_file: /home/imv5103/group/lab/ishika/genomes/hg38/hg38.fa
 blacklist_file: /home/imv5103/group/lab/jianyu/projects/GR_domain_adaptation/0_data/genome/blacklist/hg38-blacklist.v2.bed
-input_window_length: 1024
-target_window_length: 256
+input_window_length: 240
+target_window_length: 240
 augment_goal: 100000
 generate_domain_data: false
 val_chrom:

@@ -97,7 +97,7 @@ generate_domain_data: false
 ```bash
 python dataset.py \
   -c data_config.yaml \
-  -o FOXA1_dataset_output
+  -o output_data_folder
 ```
 
 同时生成模型可读取的 WebDataset：
@@ -105,7 +105,7 @@ python dataset.py \
 ```bash
 python dataset.py \
   -c data_config.yaml \
-  -o FOXA1_dataset_output \
+  -o output_data_folder \
   --wds \
   -p 10
 ```
@@ -113,7 +113,7 @@ python dataset.py \
 参数说明：
 
 - `-c` / `--config`：输入 YAML 配置文件
-- `-o` / `--output`：BED 和 WebDataset 的输出目录
+- `-o` / `--output`：BED 和 WebDataset 的输出目录。示例里的 `output_data_folder` 是这个目录的占位名，实际运行时换成自己的路径
 - `--wds`：额外生成 WebDataset `.tar` 分片
 - `-p`：写入 WebDataset 使用的并行进程数，默认为 10；应与申请到的 CPU 数量匹配
 - `--normalizeBAM`：配置了 `post_chip_bam` 时，按每百万 mapped reads 对 BAM 信号归一化
@@ -121,10 +121,10 @@ python dataset.py \
 上述命令在项目目录运行时，输出位于：
 
 ```text
-FOXA1_dataset_output/
+output_data_folder/
 ```
 
-使用 `--wds` 时，每个 `.tar` 分片最多包含约 5000 个样本，并生成 `data_config.post_run.yaml`，其中记录产生的 BED 和 WebDataset 文件路径。
+使用 `--wds` 时，每个 `.tar` 分片最多包含约 5000 个样本，并在输出目录生成 `post_run.yaml`，其中记录这次产生的 BED 和 WebDataset 文件路径。上面的例子会写到 `output_data_folder/post_run.yaml`。换一个 `-o` 目录就会得到另一份清单，不会覆盖其他数据集。
 
 
 | 函数 / 类                               | 主要功能                                                                                              |
@@ -138,7 +138,7 @@ FOXA1_dataset_output/
 | `define_coordinates_in_one_cell`     | 组织整个坐标生成过程：划分 train/val/test、扩增样本、添加正负链，并写出 BED 文件                                                |
 | `writeWDS`                           | 从坐标中读取 DNA 序列和测序信号，保存为模型可直接读取的 WebDataset                                                         |
 | `standardize_transform`              | 为 chromatin 信号和 ChIP target 设置标准化或归一化方法                                                           |
-| `if __name__ == "__main__"`          | 读取配置并运行上述流程；使用 `--wds` 时还会写出 tar 文件和 `*.post_run.yaml`                                            |
+| `if __name__ == "__main__"`          | 读取配置并运行上述流程；使用 `--wds` 时还会写出 tar 文件，并把 `post_run.yaml` 写到 `-o` 目录                          |
 
 
 主要数据流为：配置文件 + peak/基因组数据 → 生成正负样本坐标 → 划分 train/val/test → 写出 BED → 可选写成 WebDataset。
@@ -206,12 +206,12 @@ wandb login --relogin
 https://wandb.ai/hairuow-carnegie-mellon-university/Rotation_project
 ```
 
-使用生成 WebDataset 时得到的 `data_config.post_run.yaml` 启动训练：
+使用生成 WebDataset 时写在输出目录里的 `post_run.yaml` 启动训练：
 
 ```bash
 python models.py fit \
   --config model_config.yaml \
-  --data.config_file data_config.post_run.yaml
+  --data.config_file output_data_folder/post_run.yaml
 ```
 
 默认 run 名称是 `FOXA1_ConvTowerDomain_v6`。可以在命令行中为每次实验指定唯一名称：
@@ -219,7 +219,7 @@ python models.py fit \
 ```bash
 python models.py fit \
   --config model_config.yaml \
-  --data.config_file data_config.post_run.yaml \
+  --data.config_file output_data_folder/post_run.yaml \
   --trainer.logger.init_args.name FOXA1_run_001
 ```
 
@@ -237,7 +237,7 @@ W&B 会记录：
 ```bash
 WANDB_MODE=offline python models.py fit \
   --config model_config.yaml \
-  --data.config_file data_config.post_run.yaml
+  --data.config_file output_data_folder/post_run.yaml
 ```
 
 任务结束后，在能联网的节点同步本地 run：
