@@ -246,6 +246,68 @@ WANDB_MODE=offline python models.py fit \
 wandb sync wandb/offline-run-*
 ```
 
+## 查看 TensorBoard 日志（`tb_logs`）
+
+训练或测试若使用 `TensorBoardLogger`，事件文件会写在 `tb_logs/<run_name>/version_*` 下。当前环境的 TensorBoard 与 protobuf 存在兼容问题，**每次**在新终端启动 TensorBoard 前需设置：
+
+```bash
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+```
+
+在 **Cursor 已 SSH 连接的主机**（或登录节点）上查看即可；日志在共享盘上，不必在分配 GPU 的计算节点上开 TensorBoard。进入项目目录并激活环境：
+
+```bash
+cd /home/hvw5476/group/lab/hairuow/rotation_project
+conda activate rotation
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+tensorboard --logdir tb_logs/FOXA1_run_002_test/version_1 --port 6006 --host 127.0.0.1
+```
+
+将 `--logdir` 换成其它路径即可查看不同 run，例如整个 `tb_logs`、某一 run 的全部 version：
+
+```bash
+tensorboard --logdir tb_logs --port 6006 --host 127.0.0.1
+tensorboard --logdir tb_logs/FOXA1_run_002_test --port 6006 --host 127.0.0.1
+```
+
+在浏览器中打开：
+
+1. Cursor **Ports（端口）** 面板中转发 `6006`，点击 **Open in Browser**；或
+2. 本机浏览器访问 **http://localhost:6006**（需 Cursor 或 SSH 已将远程 `127.0.0.1:6006` 映射到本机）。
+
+若 6006 已被占用，可改用其它端口（如 `6007`），并在 Ports / SSH 中转发对应端口。
+
+不建议在计算节点上使用 `--bind_all` 后访问终端里显示的 `http://E1-xxxxx.cm.cluster:6006/`：笔记本通常无法直连计算节点，应使用 `--host 127.0.0.1` 配合端口转发。
+
+看完后在运行 TensorBoard 的终端按 `Ctrl+C` 结束进程。
+
+## 使用最优 checkpoint 运行测试
+
+在已分配 GPU 的计算节点上，进入项目目录并激活环境：
+
+```bash
+cd /home/hvw5476/group/lab/hairuow/rotation_project
+conda activate rotation
+```
+
+若测试时使用 TensorBoard logger，请在同一终端设置 `export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`（原因与用法见上文「查看 TensorBoard 日志」）。
+
+使用 `FOXA1_run_002` 的最优 checkpoint（epoch 20，val_loss 0.361897）运行测试：
+
+```bash
+python models.py test \
+  --config model_config.yaml \
+  --data.config_file data_config.post_run.yaml \
+  --ckpt_path checkpoints/FOXA1_run_002/best-epoch=20-val_loss=0.361897.ckpt \
+  --trainer.devices 1 \
+  --trainer.strategy auto \
+  --trainer.logger.init_args.name FOXA1_run_002_test
+```
+
+上述命令使用 `model_config.yaml` 中的 W&B logger，测试 run 名称为 `FOXA1_run_002_test`。测试使用单个设备，加载指定权重，不重新训练。
+
+分类测试按 dataloader 记录 auROC、auPRC 和正类曲线：W&B 使用 `wandb.plot.roc_curve()`、`wandb.plot.pr_curve()`；配置为 TensorBoard logger 时使用 `add_figure()`。预测结果保存为 `predictions.txt`，具体路径会在终端输出。
+
 ## 使用 `sbatch` 提交训练
 
 `submit_train.sh` 会在 `mahony` 分区申请 1 张 GPU、4 个 CPU、64G 内存和 24 小时，并在 `rotation` 环境中运行上述 `models.py fit` 命令。

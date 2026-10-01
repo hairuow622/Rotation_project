@@ -23,6 +23,7 @@ export CUDA_VISIBLE_DEVICES=0
 export RUN_NAME="${RUN_NAME:-FOXA1_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "checkpoints/${RUN_NAME}"
 echo "RUN_NAME=${RUN_NAME}"
+echo "W&B project: Rotation_project (entity: hairuow-carnegie-mellon-university)"
 
 python models.py fit \
   --config model_config.yaml \

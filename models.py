@@ -4,6 +4,7 @@ from copy import deepcopy
 import inspect
 import os
 import sys
+import warnings
 
 from einops.layers.torch import Rearrange
 import math
@@ -17,6 +18,7 @@ from pytorch_lightning.callbacks import (
     ModelSummary,
 )
 from pytorch_lightning.cli import LightningCLI
+from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from scipy.stats import pearsonr
 import seaborn as sns
 import torch
@@ -119,12 +121,7 @@ class TrainingRoutineHook(pl.LightningModule):
     def on_test_start(self):
         # TensorBoard log_hyperparams accepts a metrics placeholder; WandbLogger only accepts params.
         metrics = {"hp/auROC": 0, "hp/auPRC": 0, "hp/MSE": 0, "hp/PearsonR": 0}
-        logger = self.logger
-        if hasattr(logger, "loggers"):
-            loggers = logger.loggers
-        else:
-            loggers = [logger]
-        for lg in loggers:
+        for lg in self.trainer.loggers:
             params = inspect.signature(lg.log_hyperparams).parameters
             if "metrics" in params:
                 lg.log_hyperparams(self.hparams, metrics)
@@ -132,6 +129,7 @@ class TrainingRoutineHook(pl.LightningModule):
                 lg.log_hyperparams(self.hparams)
         
     def on_test_epoch_start(self):
+        self.test_step_outputs.clear()
         # ensure world size is 1
         if self.trainer.world_size != 1:
             print(f"World size is {self.trainer.world_size}")
@@ -154,6 +152,8 @@ class TrainingRoutineHook(pl.LightningModule):
         return test_loss
     
     def on_test_epoch_end(self):
+        if not self.test_step_outputs:
+            return
         # collect outputs from each batch
         out_keys = []
         out_preds = []
@@ -184,7 +184,7 @@ class TrainingRoutineHook(pl.LightningModule):
         
             df_save = pd.DataFrame({"Region": out_keys, "Truth": out_trues, "Predictions": out_preds_sig, "Domain": out_domains, "Dataloader_idx": out_dataloader_idx})
             print(f"entropy loss: {F.binary_cross_entropy_with_logits(out_preds, out_trues)}")
-            print(f"accuracy: {self.accuracy(out_preds_sig, out_trues)}")
+            print(f"accuracy: {((out_preds_sig >= 0.5) == out_trues.bool()).float().mean()}")
             
             ## ROC and PRC curves
             fig_roc, ax_roc = plt.subplots()
@@ -193,18 +193,43 @@ class TrainingRoutineHook(pl.LightningModule):
                 out_trues_sub = out_trues[out_dataloader_idx==idx]
                 out_preds_sig_sub = out_preds_sig[out_dataloader_idx==idx]
 
-                display = metrics.RocCurveDisplay.from_predictions(out_trues_sub, out_preds_sig_sub)
+                if torch.unique(out_trues_sub).numel() < 2:
+                    warnings.warn(f"Dataloader {int(idx)} has only one class; skipping ROC/PR curves.")
+                    continue
+
                 auROC = metrics.roc_auc_score(out_trues_sub, out_preds_sig_sub)
-                display.plot(ax=ax_roc, label=f'Dataloader {idx}; auROC={auROC:.2f}')
-                
-                display = metrics.PrecisionRecallDisplay.from_predictions(out_trues_sub, out_preds_sig_sub)
+                metrics.RocCurveDisplay.from_predictions(out_trues_sub, out_preds_sig_sub,
+                    ax=ax_roc, name=f'Dataloader {int(idx)}; auROC={auROC:.2f}')
                 auPRC = metrics.average_precision_score(out_trues_sub, out_preds_sig_sub)
-                display.plot(ax=ax_prc, label=f'Dataloader {idx}; auPRC={auPRC:.2f}')
-                
+                metrics.PrecisionRecallDisplay.from_predictions(out_trues_sub, out_preds_sig_sub,
+                    ax=ax_prc, name=f'Dataloader {int(idx)}; auPRC={auPRC:.2f}')
+
                 self.log(f"hp/auROC_{idx}", auROC, sync_dist=True)
                 self.log(f"hp/auPRC_{idx}", auPRC, sync_dist=True)
-            self.logger.experiment.add_figure("ROC on test data", fig_roc)
-            self.logger.experiment.add_figure("PRC on test data", fig_prc)
+                for logger in self.trainer.loggers:
+                    if isinstance(logger, WandbLogger):
+                        import wandb
+
+                        y_true = out_trues_sub.numpy().astype(np.int64)
+                        p = out_preds_sig_sub.numpy()
+                        y_probas = np.column_stack((1 - p, p))
+                        logger.experiment.log({
+                            f"test/roc_dataloader_{int(idx)}": wandb.plot.roc_curve(
+                                y_true, y_probas, labels=["Unbound", "Bound"],
+                                classes_to_plot=[1], title=f"ROC - Dataloader {int(idx)}"),
+                            f"test/pr_dataloader_{int(idx)}": wandb.plot.pr_curve(
+                                y_true, y_probas, labels=["Unbound", "Bound"],
+                                classes_to_plot=[1], title=f"PR - Dataloader {int(idx)}"),
+                            "trainer/global_step": self.global_step,
+                        })
+            for logger in self.trainer.loggers:
+                if isinstance(logger, TensorBoardLogger):
+                    logger.experiment.add_figure("ROC on test data", fig_roc,
+                                                 global_step=self.global_step, close=False)
+                    logger.experiment.add_figure("PRC on test data", fig_prc,
+                                                 global_step=self.global_step, close=False)
+            plt.close(fig_roc)
+            plt.close(fig_prc)
         else:
             out_preds = out_preds.float()  # Converted everything to float to avoid  ScalarType BFloat16
             out_trues = out_trues.float()
@@ -214,7 +239,6 @@ class TrainingRoutineHook(pl.LightningModule):
             df_save = pd.DataFrame({"Region": out_keys, "Truth": out_trues, "Predictions": out_preds, "Label": out_labels, "Domain": out_domains, "Dataloader_idx": out_dataloader_idx})
             ## scatterplot on all test data
             axis_limit = max(np.percentile(out_preds, 99), np.percentile(out_trues, 99))
-            fig = plt.figure(figsize=(12, 12))
             jg = sns.jointplot(x='Predictions', y='Truth', hue='Label', palette=['orange', 'deepskyblue'],
                                data=df_save, alpha=0.05)
             jg.ax_joint.axline((0, 0), slope=1, linestyle='--', color='black')
@@ -224,11 +248,31 @@ class TrainingRoutineHook(pl.LightningModule):
             jg.ax_joint.set_ylabel("True target")
             jg.ax_joint.text(0.1, 0.8, f"pearsonr correlation efficient/p-value \n{pearsonr(out_preds, out_trues)[0]:.2f}", transform=plt.gca().transAxes, fontsize='large')
             jg.ax_joint.text(0.1, 0.7, f"mean suqare error \n{np.square(out_preds-out_trues).mean():.4f}", transform=plt.gca().transAxes, fontsize='large')
-            self.logger.experiment.add_figure(f"Prediction vs True on whole test dataset", jg.figure)
+            for logger in self.trainer.loggers:
+                if isinstance(logger, TensorBoardLogger):
+                    logger.experiment.add_figure("Prediction vs True on whole test dataset",
+                                                 jg.figure, global_step=self.global_step, close=False)
+                elif isinstance(logger, WandbLogger):
+                    logger.log_image(key="test/prediction_vs_true", images=[jg.figure],
+                                     step=self.global_step)
+            plt.close(jg.figure)
             self.log("hp/MSE", metrics.mean_squared_error(out_trues, out_preds))
             self.log("hp/PearsonR", pearsonr(out_trues, out_preds)[0])
 
-        df_save.to_csv(os.path.join(self.logger.log_dir, "predictions.txt"), header=True, index=False, sep="\t")
+        output_dirs = set()
+        for logger in self.trainer.loggers:
+            if isinstance(logger, TensorBoardLogger):
+                output_dirs.add(logger.log_dir)
+            elif isinstance(logger, WandbLogger):
+                output_dirs.add(logger.experiment.dir)
+        if not output_dirs:
+            output_dirs.add(self.trainer.default_root_dir)
+        for output_dir in output_dirs:
+            os.makedirs(output_dir, exist_ok=True)
+            prediction_path = os.path.join(output_dir, "predictions.txt")
+            df_save.to_csv(prediction_path, header=True, index=False, sep="\t")
+            print(f"Test predictions saved to: {prediction_path}")
+        self.test_step_outputs.clear()
 
 class squeeze(nn.Module):
     def forward(self, x):
@@ -363,6 +407,7 @@ class ConvTowerDomain_v6(TrainingRoutineHook):
                  dropout=0.,
                  gamma=0.99995,
                  lr=1e-4,
+                 weight_decay=1e-4,
                  lambd=0,
                  classification=False,
                  seqonly=False):
@@ -380,6 +425,7 @@ class ConvTowerDomain_v6(TrainingRoutineHook):
         self.dropout = dropout
         self.gamma = gamma
         self.lr = lr
+        self.weight_decay = weight_decay
         self.lambd = lambd
         self.classification = classification
         self.seqonly = seqonly
@@ -519,7 +565,7 @@ class ConvTowerDomain_v6(TrainingRoutineHook):
         return test_loss
     
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         scheduler = CyclicLR(optimizer, max_lr=self.lr, base_lr=self.lr/10,
                              mode="exp_range", gamma=self.gamma,
                              cycle_momentum=False)
@@ -1142,7 +1188,7 @@ def cli_main():
     if not run_name:
         run_name = datetime.now().strftime("FOXA1_%Y%m%d_%H%M%S")
         os.environ["RUN_NAME"] = run_name
-    if "--trainer.logger.init_args.name" not in sys.argv:
+    if "fit" in sys.argv and "--trainer.logger.init_args.name" not in sys.argv:
         sys.argv.extend(["--trainer.logger.init_args.name", run_name])
 
     ckpt_dir = os.path.join("checkpoints", run_name)

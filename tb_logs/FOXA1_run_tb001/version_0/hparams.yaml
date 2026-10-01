@@ -1,0 +1,16 @@
+activation: LeakyReLU
+attn_dim_feedforward: 1024
+attn_num_heads: 8
+attn_num_layers: 1
+chroms_channel: 1
+classification: true
+conv1d_filter: 128
+conv_tower_depth: 4
+conv_tower_dilation: 1
+conv_tower_kernel: 5
+dropout: 0.5
+gamma: 0.999999
+input_len: 1024
+lambd: 0
+lr: 1.0e-05
+seqonly: true
