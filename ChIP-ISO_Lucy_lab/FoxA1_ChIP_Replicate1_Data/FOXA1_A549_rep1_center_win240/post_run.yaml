@@ -1,0 +1,50 @@
+post_chip_peak: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FoxA1_ChIP_A549_MACS2_callpeak_narrowPeak_OnlyPeak.bed
+genome_size_file: /home/imv5103/group/lab/ishika/genomes/hg38/hg38.fa.fai
+genome_fasta_file: /home/imv5103/group/lab/ishika/genomes/hg38/hg38.fa
+blacklist_file: /home/imv5103/group/lab/jianyu/projects/GR_domain_adaptation/0_data/genome/blacklist/hg38-blacklist.v2.bed
+input_window_length: 240
+target_window_length: 240
+augment_goal: 100000
+generate_domain_data: false
+val_chrom:
+- chr3
+test_chrom:
+- chr2
+bed:
+  single_train_readcount_bound:
+    pos_shift: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_train_readcount_bound_pos_shift.bed
+  single_train_readcount_unbound:
+    neg_random: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_train_readcount_unbound_neg_random.bed
+    neg_gc: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_train_readcount_unbound_neg_gc.bed
+    neg_flank: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_train_readcount_unbound_neg_flank.bed
+  single_val_readcount:
+    pos_shift: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_val_readcount_pos_shift.bed
+    neg_random: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_val_readcount_neg_random.bed
+    neg_gc: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_val_readcount_neg_gc.bed
+    neg_flank: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_val_readcount_neg_flank.bed
+  single_test_readcount:
+    pos_shift: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_readcount_pos_shift.bed
+    neg_random: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_readcount_neg_random.bed
+    neg_gc: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_readcount_neg_gc.bed
+    neg_flank: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_readcount_neg_flank.bed
+  single_test_random:
+    random_genome: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_random_random_genome.bed
+webdataset:
+  single_train_readcount_bound:
+    pos_shift: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_train_readcount_bound_pos_shift_{00..29}.tar
+  single_train_readcount_unbound:
+    neg_random: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_train_readcount_unbound_neg_random_{00..35}.tar
+    neg_gc: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_train_readcount_unbound_neg_gc_{00..35}.tar
+    neg_flank: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_train_readcount_unbound_neg_flank_{00..33}.tar
+  single_val_readcount:
+    pos_shift: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_val_readcount_pos_shift_{0..2}.tar
+    neg_random: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_val_readcount_neg_random_{0..2}.tar
+    neg_gc: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_val_readcount_neg_gc_{0..2}.tar
+    neg_flank: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_val_readcount_neg_flank_{0..2}.tar
+  single_test_readcount:
+    pos_shift: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_readcount_pos_shift_{0..2}.tar
+    neg_random: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_readcount_neg_random_{0..2}.tar
+    neg_gc: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_readcount_neg_gc_{0..2}.tar
+    neg_flank: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_readcount_neg_flank_{0..2}.tar
+  single_test_random:
+    random_genome: /home/hvw5476/group/lab/hairuow/rotation_project/ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/single_test_random_random_genome_{00..39}.tar

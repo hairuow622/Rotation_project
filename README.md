@@ -4,6 +4,9 @@
 
 数据构建见 `dataset.py`：read count 训练集包含 bound shift、unbound GC-match / flanking / motif-match / random；domain discriminator 使用 accessible 与 motif-match 区域。
 
+ChIP-ISO datasets: GSE247411. 
+ChIP–seq datasets: GSE247412. 
+
 ## 文件说明
 
 
