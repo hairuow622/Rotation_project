@@ -596,3 +596,113 @@ class BedDataModule(pl.LightningDataModule):
         return [DataLoader(self.test_dl, batch_size=self.batch_size_per_rank, num_workers=self.num_workers,
                            collate_fn=collate_add_domain_source),]
 
+
+class ChIPISODataset(torch.utils.data.Dataset):
+    """In-memory ChIP-ISO sequences; reverse-complements each sample with p=0.5 when rc_augment is set."""
+    def __init__(self, names, seqs, targets, labels, rc_augment=False, return_key=False):
+        self.names = list(names)
+        self.seqs = seqs
+        self.targets = targets
+        self.labels = labels
+        self.rc_augment = rc_augment
+        self.return_key = return_key
+        self.chrom = torch.zeros(1, seqs.shape[-1])
+
+    def __len__(self):
+        return len(self.names)
+
+    def __getitem__(self, idx):
+        seq = self.seqs[idx]
+        if self.rc_augment and torch.rand(1).item() < 0.5:
+            # ACGT channel order, so reversing channels complements the bases
+            seq = seq.flip([0, 1])
+        item = (seq, self.chrom, self.targets[idx], self.labels[idx])
+        if self.return_key:
+            return (self.names[idx], *item)
+        return item
+
+
+class ChIPISODataModule(pl.LightningDataModule):
+    """
+    Fine-tuning data from ChIP-ISO, driven by the manifest written by split_chipiso.py.
+    Train/val always use ft_train/ft_val; test uses `test_split` (ft_test or al_pool).
+    """
+    SPLITS = ("ft_train", "ft_val", "ft_test", "al_pool")
+
+    def __init__(self,
+                 fasta_file,
+                 split_file,
+                 test_split="ft_test",
+                 input_len=240,
+                 batch_size=64,
+                 num_workers=4,
+                 rc_augment=True,
+                 label_threshold=1.0):
+        super().__init__()
+        if test_split not in self.SPLITS:
+            raise ValueError(f"test_split must be one of {self.SPLITS}, got {test_split}")
+        self.fasta_file = fasta_file
+        self.split_file = split_file
+        self.test_split = test_split
+        self.input_len = input_len
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.rc_augment = rc_augment
+        self.label_threshold = label_threshold
+
+    def _read_fasta(self):
+        seqs = {}
+        name = None
+        with open(self.fasta_file) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith(">"):
+                    name = line[1:]
+                    seqs[name] = []
+                else:
+                    seqs[name].append(line)
+        return {k: "".join(v) for k, v in seqs.items()}
+
+    def _encode(self, seq):
+        onehot = scl.utils.dna2OneHot(seq[:self.input_len])
+        if onehot.shape[1] < self.input_len:
+            onehot = np.pad(onehot, ((0, 0), (0, self.input_len - onehot.shape[1])))
+        return onehot
+
+    def _build(self, df, rc_augment=False, return_key=False):
+        seqs = torch.from_numpy(np.stack([self._encode(self.fasta[n]) for n in df["name"]]))
+        targets = torch.from_numpy(np.log1p(df["signal"].to_numpy(np.float32))[:, None])
+        labels = torch.from_numpy((df["signal"].to_numpy() >= self.label_threshold).astype(np.float32)[:, None])
+        return ChIPISODataset(df["name"], seqs, targets, labels, rc_augment=rc_augment, return_key=return_key)
+
+    def setup(self, stage=None):
+        manifest = pd.read_csv(self.split_file, sep="\t")
+        self.fasta = self._read_fasta()
+        missing = set(manifest["name"]) - set(self.fasta)
+        if missing:
+            raise KeyError(f"{len(missing)} manifest sequences not found in {self.fasta_file}, e.g. {sorted(missing)[:3]}")
+
+        subsets = {s: manifest[manifest["split"] == s] for s in self.SPLITS}
+        print("ChIP-ISO split sizes: " + ", ".join(f"{s}={len(d)}" for s, d in subsets.items()))
+
+        if stage in ("fit", "validate", None):
+            self.train_ds = self._build(subsets["ft_train"], rc_augment=self.rc_augment)
+            self.val_ds = self._build(subsets["ft_val"])
+        if stage in ("test", "predict", None):
+            self.test_ds = self._build(subsets[self.test_split], return_key=True)
+            print(f"Testing on {self.test_split} ({len(self.test_ds)} sequences)")
+
+    def train_dataloader(self):
+        return DataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True,
+                          num_workers=self.num_workers, pin_memory=True, drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_ds, batch_size=self.batch_size, shuffle=False,
+                          num_workers=self.num_workers, pin_memory=True)
+
+    def test_dataloader(self):
+        return [DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False,
+                           num_workers=self.num_workers, collate_fn=collate_add_domain_source)]
+
