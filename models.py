@@ -19,7 +19,7 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.cli import LightningCLI
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, spearmanr
 import seaborn as sns
 import torch
 from torch import nn, optim
@@ -120,7 +120,7 @@ class TrainingRoutineHook(pl.LightningModule):
     # Using custom or multiple metrics (default_hp_metric=False)
     def on_test_start(self):
         # TensorBoard log_hyperparams accepts a metrics placeholder; WandbLogger only accepts params.
-        metrics = {"hp/auROC": 0, "hp/auPRC": 0, "hp/MSE": 0, "hp/PearsonR": 0}
+        metrics = {"hp/auROC": 0, "hp/auPRC": 0, "hp/MSE": 0, "hp/PearsonR": 0, "hp/SpearmanR": 0}
         for lg in self.trainer.loggers:
             params = inspect.signature(lg.log_hyperparams).parameters
             if "metrics" in params:
@@ -258,6 +258,7 @@ class TrainingRoutineHook(pl.LightningModule):
             plt.close(jg.figure)
             self.log("hp/MSE", metrics.mean_squared_error(out_trues, out_preds))
             self.log("hp/PearsonR", pearsonr(out_trues, out_preds)[0])
+            self.log("hp/SpearmanR", spearmanr(out_trues, out_preds)[0])
 
         output_dirs = set()
         for logger in self.trainer.loggers:
@@ -609,7 +610,99 @@ class ConvTowerDomain_v6_New_PostAttn(ConvTowerDomain_v6):
         y_hat = torch.flatten(y_hat, start_dim=1)
         y_pred = self.main_pred(y_hat)
         return y_pred
-    
+
+class ConvTowerDomain_v6_FineTune(ConvTowerDomain_v6):
+    """
+    ConvTowerDomain_v6 initialized from a pretrained checkpoint (weights only) for fine-tuning,
+    e.g. regression on ChIP-ISO signal with classification=False
+    """
+    def __init__(self, pretrained_ckpt=None, freeze_backbone=False, reinit_head=False, calibrate_head=False, **kwargs):
+        super().__init__(**kwargs)
+        self.pretrained_ckpt = pretrained_ckpt
+        self.freeze_backbone = freeze_backbone
+        self.calibrate_head = calibrate_head
+        self.save_hyperparameters()
+
+        if pretrained_ckpt is not None:
+            state_dict = torch.load(pretrained_ckpt, map_location="cpu", weights_only=False)["state_dict"]
+            self.load_state_dict(state_dict, strict=True)
+            print(f"Loaded pretrained weights from {pretrained_ckpt}")
+        if reinit_head:
+            self.main_pred[0].reset_parameters()
+        if freeze_backbone:
+            for module in self.backbone_modules():
+                module.requires_grad_(False)
+
+        self.val_step_outputs = []
+
+    def backbone_modules(self):
+        return [self.seq_stem, self.seq_conv_tower]
+
+    def on_fit_start(self):
+        # Rescale the pretrained output (logit scale) to the regression target with a least-squares
+        # fit on the training set; otherwise the first MSE updates destroy the pretrained ranking.
+        if not self.calibrate_head or self.classification:
+            return
+        was_training = self.training
+        self.eval()
+        preds, trues = [], []
+        with torch.no_grad():
+            for seq, chroms, y, _ in self.trainer.datamodule.train_dataloader():
+                preds.append(self(seq.to(self.device), chroms.to(self.device)).float().cpu())
+                trues.append(y.float())
+        preds = torch.cat(preds).flatten().numpy()
+        trues = torch.cat(trues).flatten().numpy()
+        a, b = np.polyfit(preds, trues, 1)
+        linear = self.main_pred[0]
+        with torch.no_grad():
+            linear.weight.mul_(float(a))
+            linear.bias.mul_(float(a)).add_(float(b))
+        print(f"Calibrated output head on {len(trues)} training sequences: y = {a:.4f} * pred + {b:.4f}")
+        self.train(was_training)
+
+    def train(self, mode=True):
+        super().train(mode)
+        # frozen BatchNorm layers keep the running statistics learned during pretraining
+        if self.freeze_backbone:
+            for module in self.backbone_modules():
+                module.eval()
+        return self
+
+    def validation_step(self, batch, batch_idx):
+        seq, chroms, y, label = batch
+        y_target = self(seq, chroms)
+        if self.classification:
+            val_loss = F.binary_cross_entropy_with_logits(y_target, label)
+            self.val_step_outputs.append((y_target.detach(), label))
+        else:
+            val_loss = F.mse_loss(y_target, y)
+            self.val_step_outputs.append((y_target.detach(), y))
+        self.log('val_loss', val_loss, sync_dist=True)
+        return {'val_loss': val_loss}
+
+    def on_validation_epoch_end(self):
+        if not self.val_step_outputs:
+            return
+        preds = torch.cat([p for p, _ in self.val_step_outputs]).float().cpu().flatten().numpy()
+        trues = torch.cat([t for _, t in self.val_step_outputs]).float().cpu().flatten().numpy()
+        self.val_step_outputs.clear()
+        if self.classification or np.std(preds) == 0:
+            return
+        self.log('val_pearson', pearsonr(preds, trues)[0], prog_bar=True)
+        self.log('val_spearman', spearmanr(preds, trues)[0], prog_bar=True)
+
+    def configure_optimizers(self):
+        params = [p for p in self.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(params, lr=self.lr, weight_decay=self.weight_decay)
+        scheduler = CyclicLR(optimizer, max_lr=self.lr, base_lr=self.lr/10,
+                             mode="exp_range", gamma=self.gamma,
+                             cycle_momentum=False)
+        return [optimizer], [{
+                                "scheduler": scheduler,
+                                "interval": "step",
+                                "frequency": 1
+                            }]
+
 class ConvTowerDomain_v6_GradientReversal_SplitSeqChrom_MultiDomain(ConvTowerDomain_v6):
     """
     Convolutional tower model v6 hooked by gradient reversal layer

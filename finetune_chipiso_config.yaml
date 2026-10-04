@@ -1,0 +1,66 @@
+# pytorch_lightning==2.0.0
+# Fine-tune the ChIP-seq pretrained FOXA1 model on ChIP-ISO signal (Stage 1 defaults).
+# Stage 2 overrides: --model.init_args.pretrained_ckpt <stage1 best> --model.init_args.freeze_backbone false
+#                    --model.init_args.calibrate_head false
+seed_everything: 32
+trainer:
+  logger:
+    class_path: pytorch_lightning.loggers.WandbLogger
+    init_args:
+      project: Rotation_project
+      entity: hairuow-carnegie-mellon-university
+      name: FOXA1_ChIPISO_finetune
+      save_dir: .
+      log_model: true
+  accelerator: gpu
+  strategy: auto
+  devices: 1
+  num_nodes: 1
+  precision: bf16-mixed
+  callbacks:
+  - class_path: pytorch_lightning.callbacks.EarlyStopping
+    init_args:
+      monitor: val_loss
+      min_delta: 0.0001
+      patience: 20
+      mode: min
+  max_epochs: 200
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 5
+  enable_checkpointing: true
+  default_root_dir: checkpoints
+ckpt_path: null
+model:
+  class_path: ConvTowerDomain_v6_FineTune
+  init_args:
+    pretrained_ckpt: checkpoints/FOXA1_20261001_140424/best-epoch=40-val_loss=0.344953.ckpt
+    freeze_backbone: true
+    reinit_head: false
+    calibrate_head: true
+    classification: false
+    chroms_channel: 1
+    input_len: 240
+    conv1d_filter: 128
+    conv_tower_depth: 4
+    conv_tower_kernel: 5
+    conv_tower_dilation: 1
+    attn_num_layers: 1
+    attn_num_heads: 8
+    attn_dim_feedforward: 1024
+    activation: LeakyReLU
+    dropout: 0.5
+    gamma: 0.999999
+    lr: 1.0e-05
+    weight_decay: 1.0e-04
+    seqonly: true
+data:
+  class_path: datamodule.ChIPISODataModule
+  init_args:
+    fasta_file: ChIP-ISO_Lucy_lab/ChIP-ISO_signal/A549_FoxA1_lib1_plus_2_all.fasta
+    split_file: ChIP-ISO_Lucy_lab/ChIP-ISO_signal/chipiso_split.tsv
+    test_split: ft_test
+    input_len: 240
+    batch_size: 64
+    num_workers: 4
+    rc_augment: true
+    label_threshold: 1.0

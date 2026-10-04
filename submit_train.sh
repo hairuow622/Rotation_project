@@ -17,13 +17,15 @@ conda activate rotation
 
 export PYTHONUNBUFFERED=1
 
-RUN_NAME="FOXA1_A549_rep1_center_win240_run1"
+MODEL_CONFIG="model_config.yaml"
 DATA_CONFIG="ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/post_run.yaml"
+WEIGHT_DECAY=$(python -c 'import sys, yaml; config = yaml.safe_load(open(sys.argv[1])); print(config["model"]["init_args"]["weight_decay"])' "${MODEL_CONFIG}")
+export RUN_NAME="FOXA1_A549_rep1_center_win240_wd${WEIGHT_DECAY}"
 
 echo "RUN_NAME=${RUN_NAME}"
 
 python models.py fit \
-  --config model_config.yaml \
+  --config "${MODEL_CONFIG}" \
   --data.config_file "${DATA_CONFIG}" \
   --trainer.default_root_dir "checkpoints/${RUN_NAME}" \
   --trainer.logger.init_args.name "${RUN_NAME}"

@@ -1,15 +1,15 @@
 # pytorch_lightning==2.0.0
-seed_everything: null
+seed_everything: 32
 trainer:
   accelerator: gpu
-  strategy: ddp_find_unused_parameters_true
+  strategy: auto
   devices: 1
   num_nodes: 1
   precision: bf16-mixed
   logger:
     class_path: pytorch_lightning.loggers.WandbLogger
     init_args:
-      name: FOXA1_A549_rep1_center_win240_run1
+      name: FOXA1_ChIPISO_v2_alpool_pred
       save_dir: .
       version: null
       offline: false
@@ -45,7 +45,7 @@ trainer:
   - class_path: pytorch_lightning.callbacks.EarlyStopping
     init_args:
       monitor: val_loss
-      min_delta: 0.001
+      min_delta: 0.0001
       patience: 20
       verbose: false
       mode: min
@@ -56,7 +56,7 @@ trainer:
       check_on_train_epoch_end: null
       log_rank_zero_only: false
   fast_dev_run: false
-  max_epochs: 50
+  max_epochs: 200
   min_epochs: null
   max_steps: -1
   min_steps: null
@@ -69,7 +69,7 @@ trainer:
   val_check_interval: null
   check_val_every_n_epoch: 1
   num_sanity_val_steps: null
-  log_every_n_steps: 50
+  log_every_n_steps: 5
   enable_checkpointing: true
   enable_progress_bar: null
   enable_model_summary: null
@@ -86,11 +86,16 @@ trainer:
   plugins: null
   sync_batchnorm: false
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: checkpoints/FOXA1_A549_rep1_center_win240_run1
-ckpt_path: null
+  default_root_dir: checkpoints/FOXA1_ChIPISO_v2_alpool_pred
+ckpt_path: checkpoints/FOXA1_ChIPISO_v2_stage2/best-epoch=00-val_loss=0.149069.ckpt
+verbose: true
 model:
-  class_path: __main__.ConvTowerDomain_v6
+  class_path: __main__.ConvTowerDomain_v6_FineTune
   init_args:
+    pretrained_ckpt: checkpoints/FOXA1_20261001_140424/best-epoch=40-val_loss=0.344953.ckpt
+    freeze_backbone: false
+    reinit_head: false
+    calibrate_head: true
     chroms_channel: 1
     input_len: 240
     conv1d_filter: 128
@@ -106,13 +111,16 @@ model:
     lr: 1.0e-05
     weight_decay: 0.0001
     lambd: 0
-    classification: true
+    classification: false
     seqonly: true
 data:
-  class_path: datamodule.SingleDataModuleWds
+  class_path: datamodule.ChIPISODataModule
   init_args:
-    config_file: ChIP-ISO_Lucy_lab/FoxA1_ChIP_Replicate1_Data/FOXA1_A549_rep1_center_win240/post_run.yaml
-    parent_dir: ./
+    fasta_file: ChIP-ISO_Lucy_lab/ChIP-ISO_signal/A549_FoxA1_lib1_plus_2_all.fasta
+    split_file: ChIP-ISO_Lucy_lab/ChIP-ISO_signal/chipiso_split.tsv
+    test_split: al_pool
+    input_len: 240
+    batch_size: 64
     num_workers: 4
-    batch_size: 128
-    steps_per_epoch: 1000
+    rc_augment: true
+    label_threshold: 1.0
