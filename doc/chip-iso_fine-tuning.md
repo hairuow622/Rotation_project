@@ -1,10 +1,10 @@
 # 用 ChIP-ISO 信号 fine-tune ChIP-seq 预训练模型（预留 AL 数据）
 
-先把 ChIP-ISO 中带数值信号的序列按亲本分组，70% 划给 fine-tuning、30% 留作 active learning (AL) 池，并固化成 manifest 文件。再用 fine-tuning 部分的 log1p 信号做 MSE 回归，fine-tune 已在 ChIP-seq 上训练好的 240bp ConvTowerDomain_v6，采用先冻结 backbone、再全量微调的两阶段策略。AL 池在 fine-tuning 过程中完全不使用。
+先把 ChIP-ISO 中带数值信号的序列按单条序列随机划分，70% 划给 fine-tuning、30% 留作 active learning (AL) 池，并固化成 manifest 文件。再用 fine-tuning 部分的 log1p 信号做 MSE 回归，fine-tune 已在 ChIP-seq 上训练好的 240bp ConvTowerDomain_v6，采用先冻结 backbone、再全量微调的两阶段策略。AL 池在 fine-tuning 过程中完全不使用。
 
 ## 实施清单
 
-- [ ] 新建 `split_chipiso.py`：解析 FASTA 与信号，丢弃 NA，用 `group_key` 分组，按样本数做 70/30 的 fine-tuning/AL 划分，再在 fine-tuning 内部做 80/10/10 划分，写出 `chipiso_split.tsv` 并打印统计
+- [ ] 新建 `split_chipiso.py`：解析 FASTA 与信号，丢弃 NA，用固定 seed 打乱序列后做 70/30 的 fine-tuning/AL 随机划分，再在 fine-tuning 内部做 80/10/10 随机划分，写出 `chipiso_split.tsv` 并打印统计
 - [ ] 在 `datamodule.py` 中实现 `ChIPISODataModule`：读取 manifest，只用 `ft_*` 部分训练和验证，`test_split` 可选 `ft_test` 或 `al_pool`，做 log1p 和 one-hot，训练时做反向互补增强
 - [ ] 在 `models.py` 中实现 `ConvTowerDomain_v6_FineTune`：加载 pretrained `state_dict`，支持 `freeze_backbone` 和 BN eval，只优化可训练参数，记录 val Pearson/Spearman
 - [ ] 在 `on_test_epoch_end` 的回归分支中加入 `hp/SpearmanR`
@@ -14,7 +14,7 @@
 ## 关键事实（已核实）
 
 - 预训练模型：`checkpoints/FOXA1_20261001_140424/best-epoch=40-val_loss=0.344953.ckpt`。参数为 `input_len=240`、`conv1d_filter=128`、`seqonly=True`、`classification=True`、`weight_decay=1e-4`，与 ChIP-ISO 的 240bp 序列长度一致。`FOXA1_run_*` 这几个 checkpoint 是 1024bp 的，不能直接用。
-- 数据：`ChIP-ISO_Lucy_lab/ChIP-ISO_signal/A549_FoxA1_lib1_plus_2_all.fasta` 有 3329 条序列。`ChIP_ISO_signal_NM0_1_all.txt` 中有 1882 条带数值的信号，另有 1321 条 `#N/A`，126 条不在信号文件里，后两类都丢弃。数据里没有 lib1 和 lib2 的标记，所以划分只能按序列家族来做。
+- 数据：`ChIP-ISO_Lucy_lab/ChIP-ISO_signal/A549_FoxA1_lib1_plus_2_all.fasta` 有 3329 条序列。`ChIP_ISO_signal_NM0_1_all.txt` 中有 1882 条带数值的信号，另有 1321 条 `#N/A`，126 条不在信号文件里，后两类都丢弃。数据里没有 lib1 和 lib2 的标记，所以直接在这 1882 条序列上随机划分。
 - 序列首尾都有约 20bp 的固定 adapter，含小写碱基，有 2 条是 239bp（需补 N 到 240）。编码沿用 `seqchromloader.utils.dna2OneHot`（ACGT 顺序，自动转大写），与预训练时保持一致。
 - 不能直接用 LightningCLI 的 `--ckpt_path`：它会恢复 optimizer、epoch 和 loop 状态，属于断点续训，不是 fine-tune。正确做法是在模型 `__init__` 里只加载 `state_dict`。
 
@@ -22,22 +22,22 @@
 
 ```mermaid
 flowchart TD
-    all["1882 seqs with signal"] -->|"group by parent, 70/30 by sample count"| ft["Fine-tuning ~1317"]
-    all --> al["AL pool ~565, untouched during fine-tuning"]
-    ft --> ftTrain["ft_train ~80%"]
-    ft --> ftVal["ft_val ~10%"]
-    ft --> ftTest["ft_test ~10%"]
+    all["1882 seqs with signal"] -->|"random shuffle, 70/30"| ft["Fine-tuning 1317"]
+    all --> al["AL pool 565, untouched during fine-tuning"]
+    ft --> ftTrain["ft_train ~1053 (80%)"]
+    ft --> ftVal["ft_val ~132 (10%)"]
+    ft --> ftTest["ft_test ~132 (10%)"]
 ```
 
 ## 1. 新建 `split_chipiso.py`，一次性生成并固化划分
 
-- 输出文件 `ChIP-ISO_Lucy_lab/ChIP-ISO_signal/chipiso_split.tsv`，列为 `name`、`group`、`signal`、`split`，其中 `split` 取值为 `ft_train`、`ft_val`、`ft_test`、`al_pool` 之一。后续 fine-tuning 和 AL 都只读这个文件，保证两边严格不重叠、结果可复现。
-- `group_key(name)` 规则：
-  - 名字里含 `chrN:start-end` 的，以坐标作为 group（这样 `seqXX_chr.._FOXA1mut`、`FOXA1_SP1_chr.._SP1mut` 会和 WT 分在同一组）。
-  - `seqN_rvs` 归入 `seqN`。
-  - 其余人工设计的序列家族按前缀整体成组，例如 `ori/mut/rev/con` 组合、`E2m`、`E2W`、`F12*`、`CCND1e`、`*_scrambled`。
-- 划分方式为按组随机划分，但比例按样本数计算，而不是按组数：设计家族的组很大（例如 `E2m` 约 128 条），直接用 `GroupShuffleSplit` 会让实际样本比例偏离目标。做法是用固定 seed 打乱组的顺序，然后依次把整组放进 AL 池，直到累计约 30% 的样本，剩下的进入 fine-tuning。fine-tuning 部分再用同样的方法按 80/10/10 切成 train/val/test。
-- 运行时打印每个 split 的样本数、组数、信号分位数，以及各家族前缀在 fine-tuning 和 AL 中的分布，用来确认两边分布相近。
+- 输出文件 `ChIP-ISO_Lucy_lab/ChIP-ISO_signal/chipiso_split.tsv`，列为 `name`、`family`、`signal`、`split`，其中 `split` 取值为 `ft_train`、`ft_val`、`ft_test`、`al_pool` 之一。后续 fine-tuning 和 AL 都只读这个文件，保证两边严格不重叠、结果可复现。
+- 划分方式为按单条序列随机划分，不考虑序列之间的亲缘关系：
+  - 用固定 seed（默认 0）打乱 1882 条序列的顺序。
+  - 前 30%（565 条）作为 AL 池，剩下 70%（1317 条）进入 fine-tuning。
+  - fine-tuning 部分再打乱一次，按 80/10/10 切成 `ft_train`、`ft_val`、`ft_test`。
+- `family` 列只用于统计报告，不参与划分。它按名字前缀粗分序列类型，例如 `FOXA1_*`、基因组来源的 `seq*`、`E2W`/`E2m`、`F12*`、`ori/mut/rev/con` 组合、`CCND1e`、`*_scrambled`。
+- 运行时打印每个 split 的样本数、信号分位数，以及各 `family` 在每个 split 中的数量，用来确认各部分分布相近。
 
 ## 2. 新增 `ChIPISODataModule`（写在 `datamodule.py` 里）
 
@@ -84,5 +84,6 @@ flowchart TD
 
 ## 注意事项
 
-- fine-tuning 训练集只有约 1050 条，单次划分的方差很大。如果要报告结果，可以在 fine-tuning 部分内部做 5-fold GroupKFold，AL 池保持不动。这一项作为后续可选扩展。
+- 随机划分会把同一亲本衍生的序列（WT 与突变体、反向互补、同一 enhancer 骨架上的设计变体）分散到不同 split。由于这些序列大部分碱基相同，`ft_val`、`ft_test` 和 AL 池里会有与训练集高度相似的序列，评估结果可能偏乐观。报告结果时需要说明这一点。
+- fine-tuning 训练集只有约 1050 条，单次划分的方差很大。如果要报告结果，可以在 fine-tuning 部分内部做 5-fold KFold，AL 池保持不动。这一项作为后续可选扩展。
 - 固定 adapter 在预训练的基因组窗口里不存在，属于轻微的分布偏移，fine-tune 会自行吸收，暂不做特殊处理。

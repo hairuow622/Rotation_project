@@ -3,13 +3,14 @@
 Split ChIP-ISO sequences with a measured signal into a fine-tuning part
 (ft_train / ft_val / ft_test) and a held-out active learning pool (al_pool).
 
-Sequences derived from the same parent (WT, mutants, reverse complements,
-designed variants sharing a backbone) are kept on the same side of every split.
+--strategy random (default): sequences are shuffled and split individually.
+--strategy group: sequences derived from the same parent (WT, mutants, reverse
+complements, designed variants sharing a backbone) are kept on the same side.
 """
 
 import argparse
 import re
-from collections import Counter, defaultdict
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -168,6 +169,7 @@ def main():
     parser.add_argument("--test-frac", type=float, default=0.1, help="fraction of the fine-tuning part")
     parser.add_argument("--kmer", type=int, default=30)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--strategy", choices=["random", "group"], default="random")
     args = parser.parse_args()
 
     seqs = read_fasta(args.fasta)
@@ -175,6 +177,7 @@ def main():
     names = sorted(n for n in signal if n in seqs)
     print(f"FASTA sequences: {len(seqs)}; numeric signal: {len(signal)}; usable: {len(names)}")
 
+    # Parent groups decide the split in group mode; in random mode they are only used to report leakage.
     groups = build_groups(names, seqs, kmer=args.kmer)
     df = pd.DataFrame({
         "name": names,
@@ -182,22 +185,32 @@ def main():
         "family": [family(n) for n in names],
         "signal": [signal[n] for n in names],
     })
-    group_sizes = df.groupby("group").size().to_dict()
-
     rng = np.random.default_rng(args.seed)
-    top = assign_groups(group_sizes, {"ft": 1 - args.al_frac, "al_pool": args.al_frac}, rng)
-    ft_groups = {g: n for g, n in group_sizes.items() if top[g] == "ft"}
     train_frac = 1 - args.val_frac - args.test_frac
-    inner = assign_groups(ft_groups, {"ft_train": train_frac, "ft_val": args.val_frac, "ft_test": args.test_frac}, rng)
-    df["split"] = [inner.get(g, top[g]) for g in df["group"]]
 
-    df[["name", "group", "family", "signal", "split"]].to_csv(args.out, sep="\t", index=False)
-    print(f"Wrote {args.out}\n")
+    if args.strategy == "random":
+        order_idx = rng.permutation(len(df))
+        n_al = int(round(args.al_frac * len(df)))
+        split = np.empty(len(df), dtype=object)
+        split[order_idx[:n_al]] = "al_pool"
+        ft_idx = rng.permutation(order_idx[n_al:])
+        n_val = int(round(args.val_frac * len(ft_idx)))
+        n_test = int(round(args.test_frac * len(ft_idx)))
+        split[ft_idx[:n_val]] = "ft_val"
+        split[ft_idx[n_val:n_val + n_test]] = "ft_test"
+        split[ft_idx[n_val + n_test:]] = "ft_train"
+        df["split"] = split
+        out_cols = ["name", "family", "signal", "split"]
+    else:
+        group_sizes = df.groupby("group").size().to_dict()
+        top = assign_groups(group_sizes, {"ft": 1 - args.al_frac, "al_pool": args.al_frac}, rng)
+        ft_groups = {g: n for g, n in group_sizes.items() if top[g] == "ft"}
+        inner = assign_groups(ft_groups, {"ft_train": train_frac, "ft_val": args.val_frac, "ft_test": args.test_frac}, rng)
+        df["split"] = [inner.get(g, top[g]) for g in df["group"]]
+        out_cols = ["name", "group", "family", "signal", "split"]
 
-    sizes = sorted(group_sizes.values(), reverse=True)
-    print(f"Groups: {len(sizes)}; largest: {sizes[:5]}; singletons: {sizes.count(1)}")
-    largest = df[df["group"] == "g0000"]
-    print(f"Largest group g0000 -> {largest['split'].iloc[0]}; families: {dict(Counter(largest['family']))}\n")
+    df[out_cols].to_csv(args.out, sep="\t", index=False)
+    print(f"Wrote {args.out} (strategy={args.strategy})\n")
 
     order = ["ft_train", "ft_val", "ft_test", "al_pool"]
     summary = df.groupby("split").agg(
@@ -212,13 +225,21 @@ def main():
     print(summary.round(3).to_string(), "\n")
 
     print("Family counts per split:")
-    print(pd.crosstab(df["family"], df["split"]).reindex(columns=order, fill_value=0).to_string())
+    print(pd.crosstab(df["family"], df["split"]).reindex(columns=order, fill_value=0).to_string(), "\n")
 
-    for a in order:
-        for b in order:
-            if a < b:
-                shared = set(df.loc[df["split"] == a, "group"]) & set(df.loc[df["split"] == b, "group"])
-                assert not shared, f"groups shared between {a} and {b}"
+    train_groups = set(df.loc[df["split"] == "ft_train", "group"])
+    print("Sequences with a related sequence (same parent group) in ft_train:")
+    for s in ["ft_val", "ft_test", "al_pool"]:
+        sub = df[df["split"] == s]
+        n_rel = sub["group"].isin(train_groups).sum()
+        print(f"  {s}: {n_rel}/{len(sub)} ({n_rel / len(sub):.0%})")
+
+    if args.strategy == "group":
+        for a in order:
+            for b in order:
+                if a < b:
+                    shared = set(df.loc[df["split"] == a, "group"]) & set(df.loc[df["split"] == b, "group"])
+                    assert not shared, f"groups shared between {a} and {b}"
 
 
 if __name__ == "__main__":

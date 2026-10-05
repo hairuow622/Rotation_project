@@ -60,3 +60,6 @@ wds/
 Thumbs.db
 *.swp
 *~
+
+*.tsv
+*.csv
