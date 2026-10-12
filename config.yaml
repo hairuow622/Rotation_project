@@ -1,15 +1,15 @@
 # pytorch_lightning==2.0.0
 seed_everything: 32
 trainer:
-  accelerator: cpu
+  accelerator: gpu
   strategy: auto
   devices: 1
   num_nodes: 1
-  precision: 32
+  precision: bf16-mixed
   logger:
     class_path: pytorch_lightning.loggers.WandbLogger
     init_args:
-      name: FOXA1_ChIPISO_finetune
+      name: FOXA1_ChIPISO_indep_level5_test
       save_dir: .
       version: null
       offline: false
@@ -28,8 +28,8 @@ trainer:
       config_exclude_keys: null
       config_include_keys: null
       allow_val_change: null
-      group: null
-      job_type: null
+      group: FOXA1_ChIPISO_indep
+      job_type: test
       mode: null
       force: null
       reinit: null
@@ -72,7 +72,7 @@ trainer:
   log_every_n_steps: 5
   enable_checkpointing: true
   enable_progress_bar: null
-  enable_model_summary: false
+  enable_model_summary: null
   accumulate_grad_batches: 1
   gradient_clip_val: null
   gradient_clip_algorithm: null
@@ -86,15 +86,16 @@ trainer:
   plugins: null
   sync_batchnorm: false
   reload_dataloaders_every_n_epochs: 0
-  default_root_dir: /tmp/zs
-ckpt_path: null
+  default_root_dir: checkpoints/FOXA1_ChIPISO_indep_level5_test
+ckpt_path: checkpoints/FOXA1_ChIPISO_indep_level5/best-epoch=66-val_loss=0.121477.ckpt
 verbose: true
 model:
   class_path: __main__.ConvTowerDomain_v6_FineTune
   init_args:
-    pretrained_ckpt: checkpoints/FOXA1_20261001_140424/best-epoch=40-val_loss=0.344953.ckpt
-    freeze_backbone: true
-    reinit_head: false
+    pretrained_ckpt: checkpoints/FOXA1_A549_rep1_center_win240_wd1e-4/best-epoch=40-val_loss=0.344953.ckpt
+    unfreeze_level: 3
+    head_lr: 0.001
+    backbone_lr: 1.0e-05
     calibrate_head: true
     chroms_channel: 1
     input_len: 240
@@ -108,7 +109,7 @@ model:
     activation: LeakyReLU
     dropout: 0.5
     gamma: 0.999999
-    lr: 1.0e-05
+    lr: 0.0001
     weight_decay: 0.0001
     lambd: 0
     classification: false
@@ -118,9 +119,9 @@ data:
   init_args:
     fasta_file: ChIP-ISO_Lucy_lab/ChIP-ISO_signal/A549_FoxA1_lib1_plus_2_all.fasta
     split_file: ChIP-ISO_Lucy_lab/ChIP-ISO_signal/chipiso_split.tsv
-    test_split: al_pool
+    test_split: ft_test
     input_len: 240
     batch_size: 64
-    num_workers: 0
+    num_workers: 4
     rc_augment: true
     label_threshold: 1.0

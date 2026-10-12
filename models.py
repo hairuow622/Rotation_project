@@ -228,8 +228,7 @@ class TrainingRoutineHook(pl.LightningModule):
                                                  global_step=self.global_step, close=False)
                     logger.experiment.add_figure("PRC on test data", fig_prc,
                                                  global_step=self.global_step, close=False)
-            plt.close(fig_roc)
-            plt.close(fig_prc)
+            test_figures = {"roc.png": fig_roc, "prc.png": fig_prc}
         else:
             out_preds = out_preds.float()  # Converted everything to float to avoid  ScalarType BFloat16
             out_trues = out_trues.float()
@@ -259,6 +258,7 @@ class TrainingRoutineHook(pl.LightningModule):
             self.log("hp/MSE", metrics.mean_squared_error(out_trues, out_preds))
             self.log("hp/PearsonR", pearsonr(out_trues, out_preds)[0])
             self.log("hp/SpearmanR", spearmanr(out_trues, out_preds)[0])
+            test_figures = {}
 
         output_dirs = set()
         for logger in self.trainer.loggers:
@@ -273,6 +273,12 @@ class TrainingRoutineHook(pl.LightningModule):
             prediction_path = os.path.join(output_dir, "predictions.txt")
             df_save.to_csv(prediction_path, header=True, index=False, sep="\t")
             print(f"Test predictions saved to: {prediction_path}")
+            for filename, fig in test_figures.items():
+                figure_path = os.path.join(output_dir, filename)
+                fig.savefig(figure_path, dpi=150, bbox_inches="tight")
+                print(f"Test figure saved to: {figure_path}")
+        for fig in test_figures.values():
+            plt.close(fig)
         self.test_step_outputs.clear()
 
 class squeeze(nn.Module):
@@ -615,11 +621,25 @@ class ConvTowerDomain_v6_FineTune(ConvTowerDomain_v6):
     """
     ConvTowerDomain_v6 initialized from a pretrained checkpoint (weights only) for fine-tuning,
     e.g. regression on ChIP-ISO signal with classification=False
+
+    The pretrained head (post_attn + main_pred) is always trained.
+    unfreeze_level (backbone parts trained in addition to the head):
+        0  none
+        1  transformer FFN and LayerNorms
+        2  whole transformer layer
+        3  + seq_conv_tower[2]
+        4  everything (+ seq_conv_tower[0..1], seq_stem)
     """
-    def __init__(self, pretrained_ckpt=None, freeze_backbone=False, reinit_head=False, calibrate_head=False, **kwargs):
+
+    def __init__(self, pretrained_ckpt=None, unfreeze_level=0, head_lr=1e-3, backbone_lr=1e-5,
+                 calibrate_head=False, **kwargs):
         super().__init__(**kwargs)
+        if not 0 <= unfreeze_level <= 4:
+            raise ValueError(f"unfreeze_level must be in 0..4, got {unfreeze_level}")
         self.pretrained_ckpt = pretrained_ckpt
-        self.freeze_backbone = freeze_backbone
+        self.unfreeze_level = unfreeze_level
+        self.head_lr = head_lr
+        self.backbone_lr = backbone_lr
         self.calibrate_head = calibrate_head
         self.save_hyperparameters()
 
@@ -627,27 +647,53 @@ class ConvTowerDomain_v6_FineTune(ConvTowerDomain_v6):
             state_dict = torch.load(pretrained_ckpt, map_location="cpu", weights_only=False)["state_dict"]
             self.load_state_dict(state_dict, strict=True)
             print(f"Loaded pretrained weights from {pretrained_ckpt}")
-        if reinit_head:
-            self.main_pred[0].reset_parameters()
-        if freeze_backbone:
-            for module in self.backbone_modules():
-                module.requires_grad_(False)
 
+        self.requires_grad_(False)
+        for module in self.head_modules() + self.unfrozen_backbone_modules():
+            module.requires_grad_(True)
+        n_head = sum(p.numel() for m in self.head_modules() for p in m.parameters())
+        n_backbone = sum(p.numel() for m in self.unfrozen_backbone_modules() for p in m.parameters())
+        print(f"unfreeze_level={unfreeze_level}: "
+              f"{n_head:,} head parameters, {n_backbone:,} trainable backbone parameters")
+
+        self._calibrated = False
         self.val_step_outputs = []
 
-    def backbone_modules(self):
-        return [self.seq_stem, self.seq_conv_tower]
+    def head_modules(self):
+        return [self.post_attn, self.main_pred]
 
-    def on_fit_start(self):
+    def unfrozen_backbone_modules(self):
+        layer = self.transformer_encoder[0]
+        levels = [
+            [],
+            [layer.linear1, layer.linear2, layer.norm1, layer.norm2],
+            [self.transformer_encoder],
+            [self.transformer_encoder, self.seq_conv_tower[2]],
+            [self.transformer_encoder, self.seq_conv_tower, self.seq_stem],
+        ]
+        return levels[self.unfreeze_level]
+
+    def train(self, mode=True):
+        super().train(mode)
+        # convolutional BatchNorm layers always keep the running statistics learned during pretraining
+        self.seq_stem.eval()
+        self.seq_conv_tower.eval()
+        # a fully frozen transformer acts as a fixed feature extractor, so its dropout is disabled too
+        if self.unfreeze_level == 0:
+            self.pre_attn.eval()
+            self.transformer_encoder.eval()
+        return self
+
+    def _calibrate_head(self):
         # Rescale the pretrained output (logit scale) to the regression target with a least-squares
         # fit on the training set; otherwise the first MSE updates destroy the pretrained ranking.
-        if not self.calibrate_head or self.classification:
+        if self._calibrated or not self.calibrate_head or self.classification:
             return
         was_training = self.training
         self.eval()
         preds, trues = [], []
         with torch.no_grad():
-            for seq, chroms, y, _ in self.trainer.datamodule.train_dataloader():
+            for seq, chroms, y, _ in self.trainer.datamodule.calibration_dataloader():
                 preds.append(self(seq.to(self.device), chroms.to(self.device)).float().cpu())
                 trues.append(y.float())
         preds = torch.cat(preds).flatten().numpy()
@@ -658,15 +704,19 @@ class ConvTowerDomain_v6_FineTune(ConvTowerDomain_v6):
             linear.weight.mul_(float(a))
             linear.bias.mul_(float(a)).add_(float(b))
         print(f"Calibrated output head on {len(trues)} training sequences: y = {a:.4f} * pred + {b:.4f}")
+        self._calibrated = True
         self.train(was_training)
 
-    def train(self, mode=True):
-        super().train(mode)
-        # frozen BatchNorm layers keep the running statistics learned during pretraining
-        if self.freeze_backbone:
-            for module in self.backbone_modules():
-                module.eval()
-        return self
+    def on_load_checkpoint(self, checkpoint):
+        # weights restored from a fine-tuned checkpoint are already on the regression scale
+        self._calibrated = True
+
+    def on_fit_start(self):
+        self._calibrate_head()
+
+    def on_test_start(self):
+        super().on_test_start()
+        self._calibrate_head()
 
     def validation_step(self, batch, batch_idx):
         seq, chroms, y, label = batch
@@ -692,9 +742,16 @@ class ConvTowerDomain_v6_FineTune(ConvTowerDomain_v6):
         self.log('val_spearman', spearmanr(preds, trues)[0], prog_bar=True)
 
     def configure_optimizers(self):
-        params = [p for p in self.parameters() if p.requires_grad]
-        optimizer = torch.optim.AdamW(params, lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = CyclicLR(optimizer, max_lr=self.lr, base_lr=self.lr/10,
+        groups = []
+        head_params = [p for m in self.head_modules() for p in m.parameters() if p.requires_grad]
+        backbone_params = [p for m in self.unfrozen_backbone_modules() for p in m.parameters() if p.requires_grad]
+        if head_params:
+            groups.append({"params": head_params, "lr": self.head_lr})
+        if backbone_params:
+            groups.append({"params": backbone_params, "lr": self.backbone_lr})
+        optimizer = torch.optim.AdamW(groups, weight_decay=self.weight_decay)
+        max_lrs = [g["lr"] for g in groups]
+        scheduler = CyclicLR(optimizer, max_lr=max_lrs, base_lr=[lr / 10 for lr in max_lrs],
                              mode="exp_range", gamma=self.gamma,
                              cycle_momentum=False)
         return [optimizer], [{

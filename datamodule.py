@@ -687,9 +687,9 @@ class ChIPISODataModule(pl.LightningDataModule):
         subsets = {s: manifest[manifest["split"] == s] for s in self.SPLITS}
         print("ChIP-ISO split sizes: " + ", ".join(f"{s}={len(d)}" for s, d in subsets.items()))
 
-        if stage in ("fit", "validate", None):
-            self.train_ds = self._build(subsets["ft_train"], rc_augment=self.rc_augment)
-            self.val_ds = self._build(subsets["ft_val"])
+        # train/val are also built for test, where the original head may be calibrated on ft_train
+        self.train_ds = self._build(subsets["ft_train"], rc_augment=self.rc_augment)
+        self.val_ds = self._build(subsets["ft_val"])
         if stage in ("test", "predict", None):
             self.test_ds = self._build(subsets[self.test_split], return_key=True)
             print(f"Testing on {self.test_split} ({len(self.test_ds)} sequences)")
@@ -701,6 +701,11 @@ class ChIPISODataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(self.val_ds, batch_size=self.batch_size, shuffle=False,
                           num_workers=self.num_workers, pin_memory=True)
+
+    def calibration_dataloader(self):
+        """ft_train in fixed order, without reverse-complement augmentation"""
+        ds = ChIPISODataset(self.train_ds.names, self.train_ds.seqs, self.train_ds.targets, self.train_ds.labels)
+        return DataLoader(ds, batch_size=self.batch_size, shuffle=False, num_workers=0)
 
     def test_dataloader(self):
         return [DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False,

@@ -1,7 +1,7 @@
 # pytorch_lightning==2.0.0
-# Fine-tune the ChIP-seq pretrained FOXA1 model on ChIP-ISO signal (Stage 1 defaults).
-# Stage 2 overrides: --model.init_args.pretrained_ckpt <stage1 best> --model.init_args.freeze_backbone false
-#                    --model.init_args.calibrate_head false
+# Fine-tune the ChIP-seq pretrained FOXA1 model on ChIP-ISO signal.
+# Defaults correspond to level 2 (calibrated pretrained head, backbone frozen). Other levels override
+# unfreeze_level on the command line, see submit_finetune.sh and doc/chip-iso_fine-tuning.md.
 seed_everything: 32
 trainer:
   logger:
@@ -33,9 +33,10 @@ ckpt_path: null
 model:
   class_path: ConvTowerDomain_v6_FineTune
   init_args:
-    pretrained_ckpt: checkpoints/FOXA1_20261001_140424/best-epoch=40-val_loss=0.344953.ckpt
-    freeze_backbone: true
-    reinit_head: false
+    pretrained_ckpt: checkpoints/FOXA1_A549_rep1_center_win240_wd1e-4/best-epoch=40-val_loss=0.344953.ckpt
+    unfreeze_level: 0
+    head_lr: 1.0e-03
+    backbone_lr: 1.0e-05
     calibrate_head: true
     classification: false
     chroms_channel: 1
@@ -50,7 +51,6 @@ model:
     activation: LeakyReLU
     dropout: 0.5
     gamma: 0.999999
-    lr: 1.0e-05
     weight_decay: 1.0e-04
     seqonly: true
 data:
